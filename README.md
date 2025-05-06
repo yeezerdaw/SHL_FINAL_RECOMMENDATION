@@ -10,8 +10,8 @@ Hiring managers often spend significant time searching for the right assessments
 3.  Recommending a ranked list of the most relevant SHL assessments.
 
 **Deployed Applications:**
-* **Interactive Demo (Streamlit UI):** [Link to Your Deployed Streamlit App e.g., `https://shlfinalrecommendation-9n4zwkcwk2dbz9ocdld3an.streamlit.app/`]
-* **API Endpoint (FastAPI):** [Link to Your Deployed FastAPI App Base URL e.g., `https://shl-final-recommendation-api-yesh.onrender.com`]
+* **Interactive Demo (Streamlit UI):** [Link to Your Deployed Streamlit App e.g., `https://shlfinalrecommendation-9n4zwkcwk2dbz9ocdld3an.streamlit.app/`
+* **API Endpoint (FastAPI):** [Link to Your Deployed FastAPI App Base URL e.g., `https://shl-final-recommendation-api-yesh.onrender.com`
     * Health Check: `https://shl-final-recommendation-api-yesh.onrender.com/health`
     * Recommend: `https://shl-final-recommendation-api-yesh.onrender.com/recommend` (POST request)
     * API Docs (Swagger): `https://shl-final-recommendation-api-yesh.onrender.com/docs`
