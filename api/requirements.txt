@@ -1,8 +1,0 @@
-FastAPI
-uvicorn
-pydantic
-sentence-transformers
-python-dotenv
-google-generativeai
-pandas
-numpy

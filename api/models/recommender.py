@@ -1,446 +1,775 @@
-import json
-import re
+import argparse
 import os
-from typing import Dict, List, Optional, Any
-import pandas as pd
-import numpy as np
-import google.generativeai as genai
+import json
+from typing import List, Dict, Tuple
+from transformers import BertTokenizer # BertModel removed
+# import torch # torch removed
+from groq import Groq
+from rank_bm25 import BM25Okapi
+import re
+import logging
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer, util
+from functools import lru_cache # Added
+from collections import defaultdict # Added
 
-# --- Configuration ---
-# Load environment variables (.env file should contain GEMINI_API_KEY=your_key)
+# Load environment variables from .env file
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# Ensure API key is available
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable not set. Please create a .env file or set the environment variable.")
 
-# Constants
-PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "../../data/assessments_structured.json"
-)
-EMBEDDING_MODEL_NAME = 'all-mpnet-base-v2'
-GEMINI_MODEL_NAME = 'gemini-1.5-flash'
-SIMILARITY_WEIGHT = 0.6  # Weight for semantic similarity score
-NAME_MATCH_WEIGHT = 0.4  # Weight for name matching score
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-print(f"Resolved PATH: {PATH}")
 class SHLRecommender:
-    """
-    Recommends SHL assessments based on natural language queries using filtering,
-    semantic search, and hybrid scoring.
-    """
-    def __init__(self, data_path: str = PATH):
+    def __init__(self):
         """
-        Initialize the recommender, load data, configure models, and pre-compute embeddings.
-
-        Args:
-            data_path (str): Path to the structured JSON data file.
+        Initializes the SHLRecommender with assessments, tokenizer,
+        BM25 index, Groq client, and enhanced skill mappings.
         """
-        print("Initializing SHLRecommender...")
-        print(f"Provided data path: {data_path}")
-        print(f"Resolved absolute path: {os.path.abspath(data_path)}")
-        print(f"File exists: {os.path.exists(data_path)}")
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data file not found at {data_path}. Please ensure the file exists.")
-
-        self.df = self._load_data(data_path)
-        self.gemini = self._init_gemini()
-        self.embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-
-        # --- Pre-compute Embeddings ---
-        print("Pre-computing embeddings for all assessments...")
-        # Create a combined text field for richer embeddings
-        self.df['CombinedText'] = self.df['Name'].fillna('') + ' | ' + self.df['Description'].fillna('')
-        self.all_doc_embeddings = self.embedding_model.encode(
-            self.df['CombinedText'].tolist(),
-            show_progress_bar=True
-        )
-        print(f"✅ Embeddings computed for {len(self.df)} assessments.")
-        print("✅ System ready. Gemini and embeddings loaded.")
-
-    def _load_data(self, path: str) -> pd.DataFrame:
-        """
-        Load assessment data from JSON, normalize, and preprocess.
-
-        Args:
-            path (str): Path to the JSON data file.
-
-        Returns:
-            pd.DataFrame: Processed DataFrame with assessment data.
-        """
-        print(f"Loading data from {path}...")
+        self.assessments = self._load_assessments()
+        
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error decoding JSON from {path}: {e}")
+            # Tokenizer might still be useful for _prepare_bm25_data or future non-BERT embeddings
+            self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
         except Exception as e:
-            raise IOError(f"Could not read file {path}: {e}")
+            logger.warning(f"Could not load BERT tokenizer. Some tokenization might be affected: {e}")
+            self.tokenizer = None # Keep tokenizer for BM25's tokenization if no other is specified
 
-        df = pd.json_normalize(data)
+        self.bm25 = None
+        self.tokenized_corpus_for_bm25 = []
+        self._prepare_bm25_data() # Uses self.tokenizer if available, otherwise basic regex
+        
+        self._enhance_technical_skills() # New method call
 
-        # Standardize column names (adjust if your JSON structure differs)
-        column_mapping = {
-            'name': 'Name',
-            'description': 'Description',
-            'length_minutes': 'Duration',
-            'test_types': 'TestTypes',
-            'job_levels': 'JobLevels',
-            'languages': 'Languages',
-            'url': 'URL',
-            'remote': 'Remote',
-            'adaptive': 'Adaptive'
-        }
-        # Only rename columns that exist in the DataFrame
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-
-        # --- Preprocessing ---
-        # Ensure essential columns exist
-        for col in ['Name', 'Description', 'TestTypes']:
-             if col not in df.columns:
-                 raise ValueError(f"Missing essential column '{col}' in the data.")
-
-        # Fill missing text fields
-        df['Name'] = df['Name'].fillna('Unknown Assessment')
-        df['Description'] = df['Description'].fillna('')
-
-        # Ensure list-like columns are actually lists and handle NaNs/nulls
-        for col in ['TestTypes', 'JobLevels', 'Languages']:
-            if col in df.columns:
-                # Convert non-list entries (like NaN) to empty lists
-                df[col] = df[col].apply(lambda x: x if isinstance(x, list) else [])
+        try:
+            self.groq_api_key = os.environ.get("GROQ_API_KEY")
+            if not self.groq_api_key:
+                logger.warning("GROQ_API_KEY not found in environment variables. LLM features will be disabled.")
+                self.groq_client = None
             else:
-                 # If column is missing, add it with empty lists
-                 df[col] = [[] for _ in range(len(df))]
-
-
-        # Handle Duration: Convert to numeric, use -1 for missing/invalid
-        if 'Duration' in df.columns:
-            df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce').fillna(-1).astype(int)
-        else:
-            df['Duration'] = -1 # Add duration column if missing
-
-        print(f"Data loaded successfully. Shape: {df.shape}")
-        return df
-
-    def _init_gemini(self):
-        """Configure and initialize the Gemini API client."""
-        try:
-            genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel(GEMINI_MODEL_NAME)
-            # Try a simple generation to check connectivity (optional)
-            # model.generate_content("test")
-            print("Gemini initialized successfully.")
-            return model
+                self.groq_client = Groq(api_key=self.groq_api_key)
+            self.llm_model = "llama3-70b-8192"
+            self.fast_llm_model = "llama3-8b-8192"
+            logger.info("Groq client initialized.")
         except Exception as e:
-            print(f"⚠️ Failed to initialize Gemini: {e}")
-            print("⚠️ Query parsing will rely solely on regex fallback.")
-            return None
+            logger.error(f"Failed to initialize Groq client: {e}")
+            self.groq_client = None
 
-    def _parse_query_gemini(self, query: str) -> Optional[Dict[str, Any]]:
+    def _enhance_technical_skills(self):
         """
-        Parse the user query using Gemini LLM to extract structured information.
-
-        Args:
-            query (str): The natural language user query.
-
-        Returns:
-            Optional[Dict[str, Any]]: A dictionary with parsed fields or None if failed.
+        Defines mappings for specific technical skills and pre-calculates
+        which assessments relate to them based on keywords in their descriptions.
+        This also addresses specific error analysis feedback.
         """
-        if not self.gemini:
-            return None # Gemini failed to initialize
-
-        prompt = f"""
-        Analyze the user query about SHL assessments and extract the following information into a valid JSON object.
-
-        Query: "{query}"
-
-        Extract JSON with EXACTLY these fields:
-        {{
-            "assessment_topic": str (The primary subject/topic of the desired assessment, e.g., "leadership", "python coding", "sales ability", "cognitive ability", "teamwork". Be specific. Return null if unclear or too generic.),
-            "max_duration": int (Maximum duration in minutes, e.g., query "under 45 mins" -> 45, "less than 1 hour" -> 59. Null if no upper limit.),
-            "min_duration": int (Minimum duration in minutes, e.g., query "over 30 mins" -> 31, "at least 1 hour" -> 60. Null if no lower limit.),
-            "exact_duration": int (Exact duration in minutes, e.g., query "30 minute test" -> 30. Null if not exact.),
-            "technical_skills": list[str] (List of specific technical skills mentioned, lowercase, e.g., ["java", "sql"]. Empty list if none.),
-            "behavioral_traits": list[str] (List of specific behavioral traits mentioned, lowercase, e.g., ["collaboration", "adaptability"]. Empty list if none.),
-            "job_role_hint": str (Any mentioned job role or level context, lowercase, e.g., "manager", "entry level", "developer". Null if none.),
-            "required_languages": list[str] (List of required languages for the test, lowercase. Empty list if none.),
-            "cleaned_query": str (The original query, possibly slightly cleaned or standardized.)
-        }}
-
-        Rules for Extraction:
-        1.  Duration: Prioritize `exact_duration`. If a range is given (e.g., "under", "over", "less/more than"), use `max_duration` or `min_duration`. Convert hours to minutes.
-        2.  Topic: Identify the core assessment subject. If multiple are plausible, pick the most prominent.
-        3.  Skills/Traits: Extract specific skills/traits mentioned.
-        4.  Cleaned Query: Return the original query for embedding purposes.
-        5.  Return ONLY the valid JSON object, without any surrounding text or markdown formatting (like ```json).
-
-        JSON Output:
-        """
-        try:
-            print(f"Sending query to Gemini: '{query}'")
-            response = self.gemini.generate_content(prompt)
-            # Clean potential markdown backticks and surrounding whitespace
-            raw_json = re.sub(r'^```json\s*|\s*```$', '', response.text.strip())
-            parsed_data = json.loads(raw_json)
-
-            # Basic validation of structure
-            expected_keys = {"assessment_topic", "max_duration", "min_duration", "exact_duration",
-                             "technical_skills", "behavioral_traits", "job_role_hint",
-                             "required_languages", "cleaned_query"}
-            if not expected_keys.issubset(parsed_data.keys()):
-                 print(f"⚠️ Gemini output missing expected keys. Output: {raw_json}")
-                 return None
-
-            print(f"Gemini parsed result: {parsed_data}")
-            return parsed_data
-        except json.JSONDecodeError as e:
-            print(f"⚠️ Gemini returned invalid JSON: {e}. Raw response: '{response.text}'")
-            return None
-        except Exception as e:
-            # Catch potential API errors, rate limits, etc.
-            print(f"⚠️ Gemini API call failed: {e}")
-            return None
-
-    def _parse_query_regex_fallback(self, query: str) -> Dict[str, Any]:
-        """Fallback query parser using simple regex (limited capability)."""
-        print("Using regex fallback parser.")
-        parsed = {
-            "assessment_topic": None, "max_duration": None, "min_duration": None,
-            "exact_duration": None, "technical_skills": [], "behavioral_traits": [],
-            "job_role_hint": None, "required_languages": [], "cleaned_query": query
+        self.tech_skill_map = {
+            'selenium': {'automated testing', 'web testing', 'test automation', 'qa automation'},
+            'manual testing': {'qa testing', 'test cases', 'quality assurance', 'manual qa', 'test execution', 'test case management'},
+            'cultural fit': {'cross-cultural', 'global mindset', 'values alignment', 'intercultural competence', 'global leadership'},
+            # Add more mappings as needed
         }
+        logger.info(f"Initialized tech_skill_map with keys: {list(self.tech_skill_map.keys())}")
 
-        # Duration parsing (simple examples)
-        if match := re.search(r'under\s+(\d+)\s*min', query, re.IGNORECASE):
-            parsed['max_duration'] = int(match.group(1))
-        elif match := re.search(r'less than\s+(\d+)\s*min', query, re.IGNORECASE):
-            parsed['max_duration'] = int(match.group(1)) -1
-        elif match := re.search(r'over\s+(\d+)\s*min', query, re.IGNORECASE):
-            parsed['min_duration'] = int(match.group(1)) + 1
-        elif match := re.search(r'(\d+)\s*min', query, re.IGNORECASE):
-             parsed['exact_duration'] = int(match.group(1))
-        # Add hour parsing if needed
+        self.skill_to_assessments = defaultdict(set)
+        if not self.assessments:
+            logger.warning("No assessments loaded, cannot populate skill_to_assessments.")
+            return
 
-        # Simple keyword extraction for topic/skills/traits (very basic)
-        if 'leadership' in query.lower(): parsed['assessment_topic'] = 'leadership'; parsed['behavioral_traits'].append('leadership')
-        if 'python' in query.lower(): parsed['assessment_topic'] = 'python coding'; parsed['technical_skills'].append('python')
-        if 'java' in query.lower(): parsed['assessment_topic'] = 'java coding'; parsed['technical_skills'].append('java')
-        if 'teamwork' in query.lower(): parsed['assessment_topic'] = 'teamwork'; parsed['behavioral_traits'].append('teamwork')
-        # ... add more basic rules as needed ...
+        for assessment in self.assessments:
+            assessment_name = assessment.get('name', '')
+            description = assessment.get('description', '').lower()
+            assessment_skills_raw = assessment.get('skills', [])
+            assessment_skills = [str(s).lower() for s in assessment_skills_raw if isinstance(s, str)]
 
-        print(f"Regex fallback result: {parsed}")
-        return parsed
 
-    def _filter_assessments(self, parsed_query: Dict[str, Any]) -> pd.DataFrame:
+            for skill_key, keywords in self.tech_skill_map.items():
+                # An assessment is related to skill_key if its description or skills contain any of the keywords,
+                # OR if its name/description/skills directly contain the skill_key itself.
+                matches_skill_key_directly = skill_key in description or skill_key in assessment_name.lower() or skill_key in assessment_skills
+                matches_any_keyword = any(kw in description for kw in keywords) or \
+                                      any(kw in ' '.join(assessment_skills) for kw in keywords)
+                
+                if matches_skill_key_directly or matches_any_keyword:
+                    self.skill_to_assessments[skill_key].add(assessment_name)
+        
+        count_mapped = sum(len(v) for v in self.skill_to_assessments.values())
+        logger.info(f"Populated skill_to_assessments: {len(self.skill_to_assessments)} skill keys mapped, total {count_mapped} assessment name associations.")
+
+
+    def _load_assessments(self) -> List[Dict]:
         """
-        Filter assessments based on parsed query criteria.
-
-        Args:
-            parsed_query (Dict[str, Any]): The structured query from the parser.
-
-        Returns:
-            pd.DataFrame: A DataFrame containing only the assessments that match the filters.
+        Loads assessments from a JSON file.
+        Adjusted path logic.
         """
-        df_filtered = self.df.copy()
-        print(f"Starting filtering with {len(df_filtered)} assessments.")
-
-        # --- Duration Filter ---
-        exact_duration = parsed_query.get('exact_duration')
-        max_duration = parsed_query.get('max_duration')
-        min_duration = parsed_query.get('min_duration')
-
-        if exact_duration is not None:
-            df_filtered = df_filtered[df_filtered['Duration'] == exact_duration]
-            print(f"Applied exact duration filter ({exact_duration} mins). Remaining: {len(df_filtered)}")
-        else:
-            if max_duration is not None:
-                 # Apply max duration, but keep assessments with unknown duration (-1) unless explicitly excluded
-                 # df_filtered = df_filtered[(df_filtered['Duration'] <= max_duration) & (df_filtered['Duration'] != -1)] # Exclude unknown
-                 df_filtered = df_filtered[df_filtered['Duration'] <= max_duration] # Include unknown (-1 matches <= max_duration)
-                 print(f"Applied max duration filter (<= {max_duration} mins). Remaining: {len(df_filtered)}")
-            if min_duration is not None:
-                 df_filtered = df_filtered[df_filtered['Duration'] >= min_duration]
-                 print(f"Applied min duration filter (>= {min_duration} mins). Remaining: {len(df_filtered)}")
-
-        # --- Test Type Filter based on Skills/Traits ---
-        # Define mappings (customize these)
-        tech_test_types = {'K', 'T', 'S'} # Knowledge, Technical, Simulation
-        behav_test_types = {'B', 'P', 'S'} # Behavioral, Personality, Simulation
-
-        required_types = set()
-        if parsed_query.get('technical_skills'):
-            required_types.update(tech_test_types)
-        if parsed_query.get('behavioral_traits'):
-            required_types.update(behav_test_types)
-        # If query mentions topic often linked to cognitive (e.g., "cognitive", "aptitude", "reasoning")
-        if any(t in parsed_query.get('assessment_topic', '').lower() for t in ['cognitive', 'aptitude', 'reasoning']):
-             required_types.add('A') # Aptitude
-
-        if required_types:
-             # Filter assessments that have AT LEAST ONE of the required test types
-             def check_types(assessment_types):
-                 return not required_types.isdisjoint(assessment_types)
-
-             df_filtered = df_filtered[df_filtered['TestTypes'].apply(check_types)]
-             print(f"Applied test type filter ({required_types}). Remaining: {len(df_filtered)}")
+        try:
+            # Try to find the file relative to the current script's directory
+            current_script_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Potential paths, common project structures:
+            # 1. ../data/file.json (data folder is sibling to script's parent folder)
+            # 2. ../../data/file.json (data folder is sibling to script's grandparent folder - common for scripts in src/models)
+            # 3. ./data/file.json (data folder is sibling to script itself)
+            # 4. Default path from original complex logic (project_root_assumed / data / file.json)
+            
+            filename = 'assessment_embeddings_groq_v2_BERT.json'
+            potential_paths_to_check = [
+                os.path.join(current_script_dir, '..', 'data', filename),
+                os.path.join(current_script_dir, '..', '..', 'data', filename),
+                os.path.join(current_script_dir, 'data', filename),
+            ]
+            
+            # Add the original assumed path structure as a fallback
+            project_root_assumed = os.path.dirname(os.path.dirname(current_script_dir)) # project_root/api/models -> project_root
+            original_assumed_path = os.path.join(project_root_assumed, 'data', filename)
+            if original_assumed_path not in [os.path.abspath(p) for p in potential_paths_to_check]: # Avoid duplicate checks
+                 potential_paths_to_check.append(original_assumed_path)
 
 
-        # --- Language Filter ---
-        required_languages = parsed_query.get('required_languages')
-        if required_languages:
-             req_langs_set = set(lang.lower() for lang in required_languages)
-             def check_langs(available_langs):
-                  # Assumes languages in df are lowercase strings in a list
-                  available_set = set(lang.lower() for lang in available_langs)
-                  return req_langs_set.issubset(available_set)
+            data_path = None
+            for p_path in potential_paths_to_check:
+                abs_path = os.path.abspath(p_path)
+                logger.debug(f"Attempting to load assessments from: {abs_path}")
+                if os.path.exists(abs_path):
+                    data_path = abs_path
+                    logger.info(f"Found assessment file at: {data_path}")
+                    break
+            
+            if not data_path:
+                logger.error(f"Assessment file '{filename}' not found in any of the checked locations: {potential_paths_to_check}")
+                return []
 
-             df_filtered = df_filtered[df_filtered['Languages'].apply(check_langs)]
-             print(f"Applied language filter ({required_languages}). Remaining: {len(df_filtered)}")
-
-        # --- Job Role Hint Filter (Optional - simple substring match) ---
-        job_hint = parsed_query.get('job_role_hint')
-        if job_hint:
-             def check_levels(levels):
-                  return any(job_hint in level.lower() for level in levels)
-             df_filtered = df_filtered[df_filtered['JobLevels'].apply(check_levels)]
-             print(f"Applied job level hint filter ('{job_hint}'). Remaining: {len(df_filtered)}")
-
-        print(f"Filtering complete. {len(df_filtered)} assessments remaining.")
-        return df_filtered
-
-
-    def recommend(self, query: str, top_k: int = 3) -> List[Dict]:
-        """
-        Main recommendation method. Parses query, filters assessments, ranks by hybrid score.
-
-        Args:
-            query (str): The natural language user query.
-            top_k (int): The number of top recommendations to return.
-
-        Returns:
-            List[Dict]: A list of recommended assessment dictionaries.
-        """
-        # 1. Parse Query
-        parsed_query = self._parse_query_gemini(query)
-        if parsed_query is None:
-            # Fallback to regex if Gemini failed
-            parsed_query = self._parse_query_regex_fallback(query)
-
-        # 2. Filter Assessments
-        filtered_df = self._filter_assessments(parsed_query)
-
-        if filtered_df.empty:
-            print("No assessments found matching the filter criteria.")
+            with open(data_path, 'r', encoding='utf-8') as f:
+                assessments = json.load(f)
+            logger.info(f"Loaded {len(assessments)} assessments from {data_path}.")
+            return assessments
+        except Exception as e:
+            logger.error(f"Failed to load assessments: {e}")
             return []
 
-        # 3. Rank Filtered Assessments
-        print(f"Ranking {len(filtered_df)} filtered assessments...")
+    def _prepare_bm25_data(self):
+        if not self.assessments:
+            logger.warning("No assessments loaded, BM25 preparation skipped.")
+            return
+        corpus_for_bm25 = []
+        for assessment in self.assessments:
+            domain_text = assessment.get('domain', "")
+            if isinstance(domain_text, list): domain_text = ", ".join(map(str,domain_text)) # Ensure all elements are strings
+            else: domain_text = str(domain_text)
 
-        # Get embeddings for the filtered assessments using their indices
-        filtered_indices = filtered_df.index
-        filtered_embeddings = self.all_doc_embeddings[filtered_indices]
+            skills_list = assessment.get('skills', [])
+            skills_text = " ".join([str(s) for s in skills_list if isinstance(s, str)])
 
-        # Encode the user query (use cleaned_query from parser)
-        query_embed = self.embedding_model.encode(parsed_query['cleaned_query'])
 
-        # Calculate semantic similarity
-        if filtered_embeddings.shape[0] > 0:
-            similarities = util.cos_sim(query_embed, filtered_embeddings)[0].numpy()
-            # Add similarity score to the filtered DataFrame
-            # Use .loc to avoid SettingWithCopyWarning
-            filtered_df.loc[:, 'similarity'] = similarities
+            text_parts = [
+                str(assessment.get('name', '')),
+                str(assessment.get('description', '')),
+                skills_text,
+                domain_text
+            ]
+            full_text = " ".join(filter(None, text_parts))
+            
+            # Use BERT tokenizer if available for potentially better tokenization, else regex
+            if self.tokenizer:
+                tokens = self.tokenizer.tokenize(full_text.lower())
+            else:
+                tokens = re.findall(r'\b\w+\b', full_text.lower())
+            corpus_for_bm25.append(tokens)
+
+        if corpus_for_bm25:
+            self.bm25 = BM25Okapi(corpus_for_bm25)
+            self.tokenized_corpus_for_bm25 = corpus_for_bm25 # Storing for potential inspection
+            logger.info(f"BM25 index prepared with {len(corpus_for_bm25)} documents.")
         else:
-             filtered_df.loc[:, 'similarity'] = np.nan
+            logger.warning("Corpus for BM25 is empty. BM25 index not created.")
 
+    def extract_query_criteria(self, query: str) -> Dict:
+        if not self.groq_client:
+            logger.warning("Groq client not available. Using fallback for criteria extraction.")
+            domain, skills = self._fallback_domain_skills(query)
+            cultural_context_fb = self._detect_cultural_focus(query) # Detect cultural focus even in fallback
+            return {"domain": domain, "skills": skills, "duration_minutes": None, "experience_level": None, "raw_query": query, "cultural_context": cultural_context_fb}
 
-        # --- Calculate Hybrid Score ---
-        assessment_topic = parsed_query.get('assessment_topic')
-        if assessment_topic:
-            # Simple name match boost: 1 if topic word(s) in name, 0 otherwise
-            # Use regex word boundaries for more precise matching
-            topic_pattern = r'\b' + re.escape(assessment_topic) + r'\b'
-            filtered_df.loc[:, 'name_match_score'] = filtered_df['Name'].str.contains(topic_pattern, case=False, na=False, regex=True).astype(float)
-            print(f"Calculated name match score for topic: '{assessment_topic}'")
-        else:
-            filtered_df.loc[:, 'name_match_score'] = 0.0 # No topic, no boost
+        # Detect cultural context first to potentially inform the LLM during extraction
+        cultural_context = self._detect_cultural_focus(query)
 
-        # Combine scores
-        filtered_df.loc[:, 'final_score'] = (SIMILARITY_WEIGHT * filtered_df['similarity'].fillna(0)) + \
-                                            (NAME_MATCH_WEIGHT * filtered_df['name_match_score'])
+        prompt = f"""Analyze the following job description to extract structured information.
+Job Description: "{query}"
+{"Identified cultural context clues (for your awareness, do not list these in skills unless they are actual job skills): " + ", ".join(cultural_context) if cultural_context else ""}
 
-        # Sort by the final combined score
-        ranked_df = filtered_df.sort_values('final_score', ascending=False)
+Extract the following:
+1.  "domain": The primary job domain (e.g., "Software Engineering", "Sales", "Quality Assurance"). If multiple are implied, pick the most central one.
+2.  "skills": A list of 3-5 most relevant technical or soft skills (e.g., ["java", "collaboration", "sales techniques", "manual testing", "selenium"]). Prioritize skills directly mentioned or strongly implied.
+3.  "duration_minutes": If a desired assessment completion time is mentioned (e.g., "around 30 minutes", "less than 40 minutes", "up to 1 hour"), extract the maximum duration in minutes as an integer. If a range is given (e.g., "30-45 minutes"), use the upper bound. If no specific duration is mentioned, return null.
+4.  "experience_level": If an experience level is mentioned (e.g., "new graduate", "senior developer", "entry-level sales"), classify it into one of: "entry", "junior", "mid", "senior", "any". If not mentioned, return null.
 
-        # 4. Format Top-K Results
-        top_results = ranked_df.head(top_k).to_dict('records')
+Return ONLY a valid JSON object with the keys "domain", "skills", "duration_minutes", and "experience_level".
+The value for "skills" should be an array of strings.
+The value for "duration_minutes" should be an integer or null.
+The value for "experience_level" should be a string or null.
+"""
+        content = "" 
+        try:
+            response = self.groq_client.chat.completions.create(
+                model=self.fast_llm_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.1
+            )
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```json"): content = content[7:]
+            if content.endswith("```"): content = content[:-3]
+            parsed = json.loads(content.strip())
+            
+            domain = parsed.get("domain", "").strip().lower()
+            skills_raw = parsed.get("skills", [])
+            if not isinstance(skills_raw, list): skills_raw = [skills_raw] if skills_raw else []
+            skills = list(dict.fromkeys([s.strip().lower() for s in skills_raw if isinstance(s, str) and s.strip()]))
+            
+            duration = parsed.get("duration_minutes")
+            if duration is not None:
+                try:
+                    duration = int(duration)
+                except (ValueError, TypeError):
+                    logger.warning(f"LLM returned non-integer duration: {duration}. Setting to None.")
+                    duration = None
+            
+            experience = parsed.get("experience_level")
+            if experience and isinstance(experience, str):
+                experience = experience.strip().lower()
+                if not experience: experience = None
+            else: 
+                experience = None
 
-        # Clean up output fields
-        output_list = []
-        for item in top_results:
-            duration_display = int(item['Duration']) if item['Duration'] != -1 else "N/A"
-            output_list.append({
-                'Name': item['Name'],
-                'Description': item.get('Description', ''), # Use .get for safety
-                'Duration': duration_display,
-                'TestTypes': item.get('TestTypes', []), # Use .get for safety
-                'URL': item.get('URL', 'N/A'), # Use .get for safety
-                'similarity': round(float(item.get('similarity', 0.0)), 4),
-                'name_match': round(float(item.get('name_match_score', 0.0)), 4),
-                'final_score': round(float(item.get('final_score', 0.0)), 4)
-            })
+            if not domain and not skills:
+                logger.warning("LLM extraction resulted in empty domain and skills. Using fallback for domain/skills.")
+                domain_fb, skills_fb = self._fallback_domain_skills(query)
+                domain = domain_fb
+                skills = skills_fb
+            elif not domain and skills:
+                 domain = self._infer_domain_from_skills_or_query(skills, query)
 
-        print(f"Returning top {len(output_list)} recommendations.")
-        return output_list
+            return {
+                "domain": domain, 
+                "skills": skills[:5],
+                "duration_minutes": duration,
+                "experience_level": experience,
+                "raw_query": query,
+                "cultural_context": cultural_context # Add detected cultural context
+            }
+        except Exception as e:
+            logger.error(f"LLM criteria extraction failed: {e}. Content: '{content}'. Using fallback.")
+            domain_fb, skills_fb = self._fallback_domain_skills(query)
+            return {"domain": domain_fb, "skills": skills_fb, "duration_minutes": None, "experience_level": None, "raw_query": query, "cultural_context": cultural_context}
 
-# --- Example Usage ---
-if __name__ == "__main__":
-    try:
-        # Create recommender instance (loads data, models, computes embeddings)
-        recommender = SHLRecommender(data_path="../data/assessments_structured.json") # Adjust path if needed
+    def _infer_domain_from_skills_or_query(self, skills: List[str], query: str) -> str:
+        combined_text = " ".join(skills) + " " + query.lower()
+        if "java" in combined_text or "spring" in combined_text: return "java development"
+        if "python" in combined_text or "django" in combined_text or "flask" in combined_text: return "python development"
+        if "javascript" in combined_text or "react" in combined_text or "angular" in combined_text or "node.js" in combined_text: return "web development"
+        if "sql" in combined_text or "database" in combined_text: return "data management"
+        if "sales" in combined_text or "crm" in combined_text: return "sales"
+        if "customer service" in combined_text or "support" in combined_text: return "customer support"
+        if "project manag" in combined_text: return "project management"
+        if "manual test" in combined_text or "qa test" in combined_text or "quality assurance" in combined_text: return "quality assurance"
+        if "selenium" in combined_text or "automated test" in combined_text: return "test automation"
+        return "general technical"
 
-        def print_recommendations(query: str):
-            """Helper function to query the recommender and print results."""
-            print("-" * 50)
-            print(f"Recommendations for: '{query}'")
-            print("-" * 50)
+    def _fallback_domain_skills(self, query: str) -> Tuple[str, List[str]]:
+        query_lower = query.lower()
+        domain_map = {
+            'java': 'java development', 'spring boot': 'java development',
+            'python': 'python development', 'django': 'python development', 'flask': 'python development',
+            'javascript': 'web development', 'react': 'web development', 'angular': 'web development', 'vue': 'web development', 'node.js': 'web development',
+            'c#': '.net development', '.net': '.net development', 'c++': 'c++ development',
+            'ruby': 'ruby development', 'rails': 'ruby development', 'php': 'php development', 'laravel': 'php development',
+            'swift': 'mobile development (ios)', 'kotlin': 'mobile development (android)', 'ios': 'mobile development (ios)', 'android': 'mobile development (android)',
+            'sql': 'database management', 'database': 'database management',
+            'cloud': 'cloud computing', 'aws': 'cloud computing', 'azure': 'cloud computing', 'gcp': 'cloud computing',
+            'devops': 'devops', 'kubernetes': 'devops', 'docker': 'devops',
+            'machine learning': 'machine learning', 'ai': 'artificial intelligence', 'data science': 'data science',
+            'cybersecurity': 'cybersecurity', 'security': 'cybersecurity', 'sales': 'sales',
+            'marketing': 'marketing', 'customer service': 'customer support', 'support': 'customer support',
+            'project manager': 'project management', 'product manager': 'product management',
+            'hr': 'human resources', 'recruitment': 'human resources', 'finance': 'finance',
+            'developer': 'software development', 'engineer': 'software engineering',
+            'manual test': 'quality assurance', 'qa test': 'quality assurance', 'quality assurance': 'quality assurance',
+            'selenium': 'test automation', 'automated test': 'test automation', 'test automation': 'test automation'
+        }
+        skill_patterns = [
+            (r'\bjava\b', 'java'), (r'spring boot', 'spring boot'), (r'\bpython\b', 'python'), (r'django', 'django'),
+            (r'javascript', 'javascript'), (r'react\.?js', 'react'), (r'angular\.?js', 'angular'), (r'node\.?js', 'node.js'),
+            (r'c#', 'c#'), (r'\.net', '.net framework'), (r'c\+\+', 'c++'), (r'\bsql\b', 'sql'),
+            (r'aws', 'aws'), (r'azure', 'microsoft azure'), (r'gcp', 'google cloud platform'),
+            (r'docker', 'docker'), (r'kubernetes', 'kubernetes'), (r'git', 'git'),
+            (r'machine learning', 'machine learning'), (r'data science', 'data science'),
+            (r'agile', 'agile methodologies'), (r'scrum', 'scrum'),
+            (r'problem[- ]?solving', 'problem solving'), (r'communicat\w+', 'communication'),
+            (r'team\w*', 'teamwork'), (r'collab\w*', 'collaboration'), (r'leadership', 'leadership'),
+            (r'manual test\w*', 'manual testing'), (r'selenium', 'selenium'), (r'test automation', 'test automation'),
+            (r'qa\b', 'quality assurance'), (r'test case\w*', 'test case design')
+        ]
+        extracted_domain = 'general technical' 
+        for kw, dom_name in domain_map.items():
+            if re.search(r'\b' + re.escape(kw) + r'\b', query_lower):
+                extracted_domain = dom_name
+                break
+        
+        extracted_skills = set()
+        for pattern, skill_name in skill_patterns:
+            if re.search(pattern, query_lower):
+                extracted_skills.add(skill_name)
+
+        for skill_key, keywords in self.tech_skill_map.items():
+            if skill_key in query_lower or any(kw in query_lower for kw in keywords):
+                extracted_skills.add(skill_key) 
+
+        if extracted_domain == 'java development' and not any(s in extracted_skills for s in ['java', 'spring boot']):
+            extracted_skills.update(['java', 'object-oriented programming'])
+        elif extracted_domain == 'software development' and not extracted_skills:
+            extracted_skills.update(['programming fundamentals', 'problem solving'])
+        elif extracted_domain == 'sales' and not extracted_skills:
+             extracted_skills.update(['communication', 'persuasion', 'customer interaction'])
+        elif (extracted_domain == 'quality assurance' or extracted_domain == 'test automation') and not extracted_skills:
+             extracted_skills.update(['attention to detail', 'analytical skills'])
+
+        if not extracted_skills: 
+            extracted_skills = ['communication', 'problem solving', 'teamwork']
+            
+        return extracted_domain, list(extracted_skills)[:5]
+
+    def _is_technical_role(self, query: str) -> bool:
+        """Identifies if a query likely relates to a technical role."""
+        tech_indicators = {
+            'developer', 'engineer', 'programming', 'software', 'technical',
+            'code', 'coding', 'algorithm', 'data', 'database', 'network',
+            'qa', 'test', 'automation', 'cybersecurity', 'devops', 'cloud',
+            'java', 'python', 'c++', 'c#', 'javascript', 'sql', 'scripting',
+            'selenium', 'manual testing' # Added from tech_skill_map keys
+        }
+        query_lower = query.lower()
+        return any(indicator in query_lower for indicator in tech_indicators)
+
+    def _boost_technical_matches_on_scores(self, scored_indices: List[Tuple[float, int]], query: str) -> List[Tuple[float, int]]:
+        """
+        Boosts scores of assessments that match technical skills mentioned in the query,
+        leveraging the pre-computed self.skill_to_assessments map.
+        """
+        boosted_scored_indices = []
+        query_lower = query.lower()
+        tech_skill_boost_value = 0.5 
+
+        for score, assessment_idx in scored_indices:
+            current_score_for_assessment = score # Keep track of original score for this item for logging
+            boost_applied_this_assessment = False
+            assessment = self.assessments[assessment_idx]
+            assessment_name = assessment.get('name', '')
+
+            for skill_key, mapped_keywords in self.tech_skill_map.items():
+                query_mentions_skill = skill_key in query_lower or \
+                                     any(kw in query_lower for kw in mapped_keywords)
+                
+                if query_mentions_skill:
+                    if assessment_name in self.skill_to_assessments.get(skill_key, set()):
+                        score += tech_skill_boost_value 
+                        boost_applied_this_assessment = True
+                        # Apply boost only once per skill_key match to avoid over-boosting from multiple query keywords for the same skill
+                        # However, an assessment can be boosted by multiple distinct skill_keys if it matches them all
+            
+            if boost_applied_this_assessment:
+                 logger.debug(f"Boosting '{assessment_name}' due to technical skill match. Score: {current_score_for_assessment:.2f} -> {score:.2f}")
+            boosted_scored_indices.append((score, assessment_idx))
+        return boosted_scored_indices
+
+    def _adjust_for_duration(self, candidates: List[Dict], target_duration: int, pool_size: int) -> List[Dict]:
+        """
+        Sorts candidates by proximity to the target_duration and then takes the top 'pool_size'.
+        Assessments without a duration are penalized (sorted towards the end).
+        """
+        if target_duration is None: 
+            return candidates[:pool_size]
+
+        def sort_key(assessment_dict):
+            length_minutes_raw = assessment_dict.get('length_minutes')
+            if length_minutes_raw is None:
+                return (True, float('inf')) 
             try:
-                results = recommender.recommend(query, top_k=3)
+                length_minutes = int(length_minutes_raw)
+                return (False, abs(length_minutes - target_duration))
+            except (ValueError, TypeError): 
+                logger.warning(f"Invalid duration '{length_minutes_raw}' for assessment '{assessment_dict.get('name')}' during sort. Penalizing.")
+                return (True, float('inf')) 
 
-                if not results:
-                    print("\nNo matching assessments found.")
-                    return
+        sorted_candidates = sorted(candidates, key=sort_key)
+        
+        logger.debug(f"Adjusted for duration: {target_duration} min. Sorted {len(candidates)} candidates, returning up to {pool_size}.")
+        return sorted_candidates[:pool_size]
 
-                print("\nTop Recommendations:")
-                for i, item in enumerate(results, 1):
-                    print(f"{i}. {item['Name']}")
-                    print(f"   Duration: {item['Duration']} mins" if item['Duration'] != "N/A" else "   Duration: N/A")
-                    print(f"   Test Types: {' | '.join(item['TestTypes'])}") # Display types nicely
-                    print(f"   Relevance Score: {item['final_score']:.3f} (Sim: {item['similarity']:.3f}, Name Match: {item['name_match']:.1f})")
-                    print(f"   URL: {item['URL']}\n")
+    @lru_cache(maxsize=256) 
+    def recommend(self, query: str, top_k: int = 7, bm25_candidate_pool_size: int = 50) -> List[Dict]:
+        if not query or not isinstance(query, str) or not query.strip():
+            logger.warning("Invalid query received. Query must be a non-empty string.")
+            return []
+        if not self.assessments:
+            logger.error("No assessments available to recommend from.")
+            return []
+        if not self.bm25:
+            logger.error("BM25 index not prepared. Cannot perform initial filtering.")
+            return []
+            
+        logger.info(f"Processing query (first 100 chars): {query[:100]}...")
+        criteria = self.extract_query_criteria(query) 
+        domain = criteria["domain"]
+        skills = criteria["skills"]
+        duration_constraint = criteria["duration_minutes"] 
 
-            except Exception as e:
-                print(f"\nAn error occurred during recommendation for '{query}': {e}")
-                import traceback
-                traceback.print_exc() # Print detailed traceback for debugging
+        logger.info(f"Extracted Criteria: Domain='{domain}', Skills={skills}, Max Duration='{duration_constraint}', Exp='{criteria['experience_level']}', CultCtx={criteria['cultural_context']}")
+        
+        if self.tokenizer:
+            query_tokens_list = self.tokenizer.tokenize(query.lower())
+        else:
+            query_tokens_list = re.findall(r'\b\w+\b', query.lower())
 
-        # --- Example Queries ---
-        print_recommendations("Leadership assessment under 45 mins")
-        print_recommendations("Leadership assessment")
-        print_recommendations("python coding test")
-        print_recommendations("customer service assessment around 30 minutes")
-        print_recommendations("cognitive ability test for managers")
-        print_recommendations("sales assessment in French") # Example requiring language
+        if not query_tokens_list and (domain or skills):
+            logger.info("Query is generic or lacks keywords, augmenting with extracted domain/skills for BM25.")
+            augment_terms = []
+            if domain: augment_terms.extend(re.findall(r'\b\w+\b', domain.lower()))
+            for skill_item in skills: # skills is a list of strings
+                 augment_terms.extend(re.findall(r'\b\w+\b', skill_item.lower())) # skill_item is a string
+            
+            if self.tokenizer: 
+                query_tokens_list.extend(self.tokenizer.tokenize(" ".join(augment_terms)))
+            else:
+                query_tokens_list.extend(augment_terms)
+            query_tokens_list = list(dict.fromkeys(query_tokens_list))
 
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        print("Please ensure the data file exists at the specified path.")
-    except ValueError as e:
-         print(f"Configuration Error: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        import traceback
-        traceback.print_exc()
+
+        if not query_tokens_list:
+            logger.warning("No effective tokens for BM25 search after processing query, domain, and skills.")
+            return []
+
+        bm25_scores = self.bm25.get_scores(query_tokens_list)
+        
+        scored_indices = []
+        for i, score in enumerate(bm25_scores):
+            # Ensure score is float, BM25Okapi sometimes returns numpy.float64
+            current_bm25_score = float(score)
+
+            assessment_domain_text_raw = self.assessments[i].get('domain', "")
+            if isinstance(assessment_domain_text_raw, list): 
+                assessment_domain_text = " ".join(map(str, assessment_domain_text_raw)).lower()
+            else: 
+                assessment_domain_text = str(assessment_domain_text_raw).lower()
+
+            current_domain_boost = 1.0
+            if domain and domain in assessment_domain_text:
+                current_domain_boost = 1.5  
+            elif domain and any(d_part in assessment_domain_text for d_part in domain.split()):
+                 current_domain_boost = 1.2 
+            
+            assessment_skills_list_raw = self.assessments[i].get('skills', [])
+            assessment_skills_lower = [str(s).lower() for s in assessment_skills_list_raw if isinstance(s, str)]
+            
+            skill_overlap_count = sum(1 for s_query in skills if s_query in assessment_skills_lower)
+            current_skill_boost = 1.0 + (0.15 * skill_overlap_count)
+
+            final_score = current_bm25_score * current_domain_boost * current_skill_boost
+            if current_bm25_score > 0: 
+                 scored_indices.append((final_score, i))
+        
+        if self._is_technical_role(query):
+            logger.info("Query identified as technical role, applying technical skill boosts.")
+            scored_indices = self._boost_technical_matches_on_scores(scored_indices, query)
+                
+        scored_indices.sort(reverse=True, key=lambda x: x[0])
+        
+        initial_bm25_pool_size = max(bm25_candidate_pool_size * 3, top_k * 10) 
+        bm25_top_indices = [idx for _, idx in scored_indices[:initial_bm25_pool_size]]
+        assessments_for_filtering = [self.assessments[i] for i in bm25_top_indices]
+        logger.info(f"BM25 (+boosts) initially retrieved {len(assessments_for_filtering)} candidates before pre-rerank filtering.")
+
+        pre_rerank_filtered_assessments = []
+        for assessment in assessments_for_filtering:
+            passes_filter = True
+            if duration_constraint is not None:
+                assessment_duration_raw = assessment.get('length_minutes')
+                try:
+                    if assessment_duration_raw is None:
+                        passes_filter = False 
+                        logger.debug(f"Filtering out '{assessment.get('name')}' (no duration, constraint is {duration_constraint})")
+                    else:
+                        assessment_duration = int(assessment_duration_raw)
+                        if assessment_duration > duration_constraint:
+                            passes_filter = False
+                            logger.debug(f"Filtering out '{assessment.get('name')}' (duration {assessment_duration} > {duration_constraint})")
+                except (ValueError, TypeError):
+                    logger.warning(f"Could not parse duration '{assessment_duration_raw}' for assessment '{assessment.get('name')}'. Filtering out.")
+                    passes_filter = False 
+            
+            if passes_filter:
+                pre_rerank_filtered_assessments.append(assessment)
+        
+        logger.info(f"After hard pre-rerank filters (e.g. max duration): {len(pre_rerank_filtered_assessments)} candidates remain.")
+
+        if duration_constraint is not None and pre_rerank_filtered_assessments:
+            logger.info(f"Adjusting candidate pool for duration preference: {duration_constraint} min.")
+            candidates_after_duration_adj = self._adjust_for_duration(
+                pre_rerank_filtered_assessments, 
+                duration_constraint,
+                bm25_candidate_pool_size 
+            )
+        else:
+            candidates_after_duration_adj = pre_rerank_filtered_assessments[:bm25_candidate_pool_size]
+
+
+        if not candidates_after_duration_adj:
+            if assessments_for_filtering: 
+                logger.warning("All candidates filtered out before LLM. Using top from BM25 pool (before hard filters) if available.")
+                # Fallback to candidates before hard duration filter, but still apply soft duration sort and pool size limit
+                if duration_constraint is not None:
+                     candidates_for_llm = self._adjust_for_duration(assessments_for_filtering, duration_constraint, bm25_candidate_pool_size)
+                else:
+                     candidates_for_llm = assessments_for_filtering[:bm25_candidate_pool_size]
+                if not candidates_for_llm: # If even this fallback yields nothing
+                    logger.warning("Fallback to pre-filter pool also yielded no candidates.")
+                    return []
+            else: 
+                logger.warning("No candidates found after BM25 filtering (empty initial pool).")
+                return []
+        else:
+            candidates_for_llm = candidates_after_duration_adj
+            
+        if not candidates_for_llm:
+            logger.warning("No candidates to send to LLM reranker after all filtering and adjustments.")
+            if assessments_for_filtering:
+                 logger.info(f"Final fallback: Returning top_k from initial BM25 pool of {len(assessments_for_filtering)} items (bypassing some filters).")
+                 return assessments_for_filtering[:top_k]
+            return [] 
+            
+        logger.info(f"Sending {len(candidates_for_llm)} candidates to LLM for reranking.")
+
+        if not self.groq_client:
+            logger.warning("Groq client not available. Skipping LLM reranking. Returning top results from processed candidate pool.")
+            return candidates_for_llm[:top_k]
+            
+        return self._rerank_with_llm(criteria, candidates_for_llm, top_k)
+
+    def _detect_cultural_focus(self, query: str) -> List[str]:
+        """Identifies cultural context requirements from the query."""
+        cultural_keywords_map = {
+            'china': {'global','chinese', 'asia', 'mandarin', 'beijing', 'shanghai'},
+            'india': {'indian', 'hindi', 'bangalore', 'mumbai', 'delhi'},
+            'global': {'global', 'international', 'worldwide', 'cross-cultural', 'multinational'},
+            'european': {'global','europe', 'european', 'eu', 'uk', 'german', 'french', 'spanish'}, # Example, can be more granular
+            'american': {'global','american', 'us', 'usa', 'north america'},
+            'collaboration': {'teamwork', 'business teams', 'stakeholders', 'cross-functional teams'},
+            'diversity': {'diversity', 'inclusion', 'equity', 'belonging'},
+        }
+        query_lower = query.lower()
+        detected_contexts = []
+        for context_name, keywords in cultural_keywords_map.items():
+            if any(word in query_lower for word in keywords): # Check if any keyword for a context is in the query
+                # Check if the context_name itself is in the query (e.g. "china")
+                # or if any of its specific keywords are in the query.
+                # This logic is okay as `any(word in query_lower for word in keywords)` covers it.
+                detected_contexts.append(context_name)
+        if detected_contexts:
+             logger.info(f"Detected cultural focus in query: {detected_contexts}")
+        return list(set(detected_contexts)) 
+
+    def _rerank_with_llm(self, criteria: Dict, 
+                        candidates_for_reranking: List[Dict], top_n: int) -> List[Dict]:
+        try:
+            if not candidates_for_reranking:
+                logger.warning("LLM Reranker: Received empty list of candidates. Returning empty.")
+                return []
+
+            candidate_details_list = []
+            for i, assessment in enumerate(candidates_for_reranking):
+                name = assessment.get('name', 'N/A')
+                assessment_skills_list_raw = assessment.get('skills', [])
+                # Ensure skills are strings for join and display
+                assessment_skills_list = [str(s) for s in assessment_skills_list_raw if isinstance(s,str)]
+
+
+                skills_display_count = 7
+                skills_str = ", ".join(assessment_skills_list[:skills_display_count])
+                if len(assessment_skills_list) > skills_display_count: skills_str += "..."
+                
+                duration = assessment.get('length_minutes', '?')
+                
+                assessment_domain_text_raw = assessment.get('domain', 'N/A')
+                if isinstance(assessment_domain_text_raw, list): 
+                    assessment_domain_text = ", ".join(map(str, assessment_domain_text_raw))
+                else: 
+                    assessment_domain_text = str(assessment_domain_text_raw)
+                
+                description_snippet = str(assessment.get('description', ''))
+                if description_snippet and len(description_snippet) > 100:
+                    description_snippet = description_snippet[:100].strip() + "..."
+                
+                details = (f"{i+1}. ID: {i+1} | Name: {name} | Domain: {assessment_domain_text} | "
+                           f"Skills: {skills_str} | Duration: {duration} min | Desc: {description_snippet}")
+                candidate_details_list.append(details)
+            
+            if not candidate_details_list: 
+                logger.warning("No candidate details to send to LLM for reranking (list became empty). Returning original candidates.")
+                return candidates_for_reranking[:top_n]
+            candidate_list_str = "\n".join(candidate_details_list)
+            
+            requirements_str_parts = [
+                f"- Primary Domain: \"{criteria['domain']}\"",
+                f"- Key Skills: {', '.join(criteria['skills'])}"
+            ]
+            if criteria.get("duration_minutes") is not None:
+                requirements_str_parts.append(f"- Target Maximum Duration: {criteria['duration_minutes']} minutes (This is a strong preference).")
+            if criteria.get("experience_level") is not None:
+                requirements_str_parts.append(f"- Target Experience Level: {criteria['experience_level']}.")
+            if criteria.get("cultural_context"): 
+                 requirements_str_parts.append(f"- Cultural Context Focus: {', '.join(criteria['cultural_context'])} (e.g., suitability for specific regions, global teams).")
+            requirements_summary = "\n".join(requirements_str_parts)
+
+            prompt = f"""You are an expert HR Tech consultant. Your task is to recommend the top {top_n} job assessments.
+Evaluate each candidate assessment against the original job query and the extracted key requirements.
+
+Original Job Query: "{criteria['raw_query']}"
+
+Key Requirements Extracted:
+{requirements_summary}
+
+Available Assessments (IDs are 1-based from this list):
+{candidate_list_str}
+
+Instructions for your response:
+1.  **Holistic Evaluation:** Evaluate each assessment against the original query AND all extracted key requirements (domain, skills, duration, experience, cultural context if specified).
+2.  **Prioritization:**
+    *   **Strong Match:** Prioritize assessments with a strong match to the primary domain and key skills.
+    *   **Constraints & Preferences:** Pay close attention to constraints like maximum duration. Assessments exceeding specified limits should be significantly penalized or avoided unless they offer an overwhelmingly superior match in other critical areas. Also consider duration preferences if mentioned.
+    *   **Cultural Context:** If a cultural context is specified, consider how well the assessment might align (e.g., language, regional norms if discernible, suitability for global roles).
+    *   **Overall Relevance:** Consider the overall suitability of the assessment's content and scope for the job role implied by the query and requirements.
+3.  **Output Format:** Return ONLY a valid JSON array of the assessment IDs (the number listed before 'Name', e.g., 'ID: 1' means you output 1) for your top {top_n} selections, in order of relevance (most relevant first). For example: [3, 1, 5].
+    *   If you find fewer than {top_n} highly relevant assessments, return only those.
+    *   If no assessments are suitably relevant, return an empty array [].
+    *   Ensure the output is ONLY the JSON array, nothing else.
+"""
+            logger.debug(f"Reranking Prompt for LLM (first 1000 chars):\n{prompt[:1000]}...")
+            response = self.groq_client.chat.completions.create(
+                model=self.llm_model, 
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.05 
+            )
+            content = response.choices[0].message.content.strip()
+            logger.debug(f"LLM Reranking Raw Response: {content}")
+            
+            if content.startswith("```json"): content = content[7:]
+            if content.endswith("```"): content = content[:-3]
+            content = content.strip()
+            if not content: 
+                logger.warning("LLM returned an empty string. Falling back.")
+                return candidates_for_reranking[:top_n]
+
+            selected_indices_from_llm_numbers = []
+            try:
+                parsed_data = json.loads(content)
+                if isinstance(parsed_data, list):
+                    selected_indices_from_llm_numbers = parsed_data
+                elif isinstance(parsed_data, dict):
+                    found_list = False
+                    for val in parsed_data.values():
+                        if isinstance(val, list):
+                            selected_indices_from_llm_numbers = val
+                            found_list = True
+                            break
+                    if not found_list:
+                        logger.warning(f"LLM response was a dict but no list of IDs found. Content: {content}")
+                else:
+                    logger.warning(f"LLM response was not a list or a parsable dict containing a list. Content: {content}")
+
+                reranked_assessments = []
+                valid_llm_indices = [] 
+                for id_val in selected_indices_from_llm_numbers:
+                    try:
+                        actual_idx = int(id_val) - 1 
+                        if 0 <= actual_idx < len(candidates_for_reranking):
+                            valid_llm_indices.append(actual_idx)
+                        else:
+                            logger.warning(f"LLM returned an out-of-bounds ID: {id_val} (1-based) for candidate pool size {len(candidates_for_reranking)}")
+                    except (ValueError, TypeError):
+                        logger.warning(f"LLM returned a non-integer ID value: {id_val}")
+                
+                added_names = set()
+                for actual_idx in valid_llm_indices:
+                    assessment = candidates_for_reranking[actual_idx]
+                    if assessment['name'] not in added_names: 
+                        reranked_assessments.append(assessment)
+                        added_names.add(assessment['name'])
+                
+                if reranked_assessments:
+                    logger.info(f"LLM reranked and selected {len(reranked_assessments)} assessments.")
+                    if len(reranked_assessments) < top_n:
+                        logger.info(f"LLM returned {len(reranked_assessments)} items, need {top_n}. Supplementing from the original candidate list sent to LLM.")
+                        for cand in candidates_for_reranking: 
+                            if len(reranked_assessments) >= top_n: break
+                            if cand['name'] not in added_names: 
+                                reranked_assessments.append(cand)
+                                added_names.add(cand['name']) 
+                    return reranked_assessments[:top_n]
+                else:
+                    logger.warning("LLM did not select any assessments or selection was invalid/empty. Falling back to top from pre-LLM candidate pool.")
+                    return candidates_for_reranking[:top_n]
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse LLM reranking response JSON: {e}. Content: '{content}'. Falling back to top from pre-LLM candidate pool.")
+                return candidates_for_reranking[:top_n]
+        except Exception as e:
+            logger.error(f"LLM reranking encountered an error: {e}. Falling back to top from pre-LLM candidate pool.")
+            return candidates_for_reranking[:top_n] if candidates_for_reranking else []
+
+
+# Main execution block for basic module testing
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SHL Recommender System - Standalone Test")
+    parser.add_argument("-q", "--query", type=str, help="A query string to get recommendations for.")
+    parser.add_argument("-k", "--top_k", type=int, default=7, help="Number of top recommendations to return (default: 7).")
+    args = parser.parse_args()
+
+    logger.info("Initializing SHLRecommender for standalone test...")
+    
+    if not os.environ.get("GROQ_API_KEY"):
+        logger.error("GROQ_API_KEY environment variable not set. LLM features will be disabled for this test.")
+    
+    recommender = SHLRecommender()
+    
+    if not recommender.assessments:
+        logger.error("No assessments were loaded. Standalone test cannot proceed effectively.")
+    else:
+        logger.info(f"SHLRecommender initialized with {len(recommender.assessments)} assessments.")
+        
+        query_to_process = args.query
+        if not query_to_process:
+            query_to_process = input("Please enter your query: ")
+
+        if not query_to_process or not query_to_process.strip():
+            logger.warning("No query provided. Exiting.")
+        else:
+            logger.info(f"\n--- Processing Query ---")
+            logger.info(f"Query: {query_to_process}")
+            
+            recommendations = recommender.recommend(query_to_process, top_k=args.top_k)
+            
+            if recommendations:
+                logger.info(f"Top {args.top_k} Recommendations for the query:")
+                for r_idx, rec in enumerate(recommendations):
+                    skills_display_raw = rec.get('skills', [])
+                    if isinstance(skills_display_raw, list): 
+                        skills_display = [str(s) for s in skills_display_raw if isinstance(s,str)][:3]
+                    else: 
+                        skills_display = 'N/A'
+                    
+                    logger.info(
+                        f"  {r_idx+1}. Name: {rec.get('name')}, "
+                        f"Domain: {rec.get('domain', 'N/A')}, "
+                        f"Skills: {skills_display}, "
+                        f"Duration: {rec.get('length_minutes', '?')} min"
+                    )
+            else:
+                logger.info("No recommendations found for the query.")
+        
+    logger.info("\n--- Standalone test finished ---")

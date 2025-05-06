@@ -1,0 +1,212 @@
+[
+  {
+    "query": "I am hiring for Java developers who can also collaborate effectively with my business teams. Looking for an assessment(s) that can be completed in 40 minutes.",
+    "assessments": [
+      {
+        "name": "Automata - Fix (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/automata-fix-new/",
+        "description": "Automata - Fix (New): A simulated compiler integrated test to measure debugging skills in C, C++ and Java. The test checks the ability to fix logical or syntactical errors and to\u2026"
+      },
+      {
+        "name": "Core Java (Entry Level) (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/core-java-entry-level-new/",
+        "description": "Core Java (Entry Level) (New): Multi-choice test that measures the knowledge of basic Java constructs, OOP concepts, file handling, exception handling, threads, generic class and inner class."
+      },
+      {
+        "name": "Java 8 (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/java-8-new/",
+        "description": "Java 8 (New): Multi-choice test that measures the knowledge of Java class design, exceptions, generics, collections, concurrency, JDBC and Java I/O fundamentals."
+      },
+      {
+        "name": "Core Java (Advanced Level) (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/core-java-advanced-level-new/",
+        "description": "Core Java (Advanced Level) (New): Multi-choice test that measures the knowledge of basic Java constructs, OOP concepts, files and exception handling, and advanced Java concepts like generics\u2026"
+      },
+      {
+        "name": "Agile Software Development | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/agile-software-development/",
+        "description": "Agile Software Development: Multi-choice test that measures the knowledge of agile methodology, scrum, feature driven software development, incremental and iterative development and\u2026"
+      },
+      {
+        "name": "Technology Professional 8.0 Job Focused Assessment | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/technology-professional-8-0-job-focused-assessment/",
+        "description": "Technology Professional 8.0 Job Focused Assessment: The Technology Job Focused Assessment assesses  key behavioral attributes  required for success in fast-paced, rapidly evolving  technology environments\u2026"
+      },
+      {
+        "name": "Computer Science (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/computer-science-new/",
+        "description": "Computer Science (New): Multi-choice test that measures the knowledge of operating system, computer architecture, DBMS and basics of computer networks and communication."
+      }
+    ]
+  },
+  {
+    "query": "I want to hire new graduates for a sales role in my company, the budget is for about an hour for each test. Give me some options",
+    "assessments": [
+      {
+        "name": "Entry Level Sales 7.1 (International) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/entry-level-sales-7-1/",
+        "description": "Entry level Sales 7.1 (International): The Entry Level Sales 7.1 Solution is for entry-level positions in which employees proactively sell products or services to customers and have their\u2026"
+      },
+      {
+        "name": "Entry Level Sales Sift Out 7.1 | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/entry-level-sales-sift-out-7-1/",
+        "description": "Entry Level Sales Sift Out 7.1: The Entry Level Sales Sift Out 7.1 Solution is for entry-level positions in which employees proactively sell products or services to customers and have their\u2026"
+      },
+      {
+        "name": "Entry Level Sales Solution | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/entry-level-sales-solution/",
+        "description": "Entry Level Sales Solution: The Precise Fit Entry Level Sales Roles Solution is for entry-level positions in which employees proactively sell products or services to customers and have\u2026"
+      },
+      {
+        "name": "Sales Representative Solution | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/sales-representative-solution/",
+        "description": "Sales Representative Solution: The Sales Representative solution is for entry-level sales positions in which employees proactively sell products to customers and have their pay and/or\u2026"
+      },
+      {
+        "name": "Sales Support Specialist Solution | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/sales-support-specialist-solution/",
+        "description": "Sales Support Specialist Solution: The Sales Support Specialist solution is for entry to mid-level sales support positions in which employees work primarily under the guidance of an account\u2026"
+      },
+      {
+        "name": "Technical Sales Associate Solution | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/technical-sales-associate-solution/",
+        "description": "Technical Sales Associate Solution: The Technical Sales Associate solution is for entry-level retail positions in which employees proactively sell a specific line of products that requires\u2026"
+      },
+      {
+        "name": "SVAR - Spoken English (Indian Accent) (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/svar-spoken-english-indian-accent-new/",
+        "description": "SVAR - Spoken English (Indian Accent)  (New): An automated spoken English test that measures fluency, pronunciation, active listening, vocabulary, grammar and spoken English understanding.     Your use of\u2026"
+      },
+      {
+        "name": "Sales & Service Phone Solution | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/sales-and-service-phone-solution/",
+        "description": "Sales & Service Phone Solution: As part of Contact Center Simulations, the Sales & Service Phone Solution includes a contact center simulation and three behavioral tests designed to measure a\u2026"
+      },
+      {
+        "name": "Sales & Service Phone Simulation | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/sales-and-service-phone-simulation/",
+        "description": "Sales & Service Phone Simulation : As part of Contact Center Simulations, the Sales & Service Phone Simulation is designed for contact center roles that involve sales or sales-related behaviors\u2026"
+      },
+      {
+        "name": "English Comprehension (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/english-comprehension-new/",
+        "description": "English Comprehension (New): Multiple-choice test that measures vocabulary, grammar and reading comprehension skills."
+      }
+    ]
+  },
+  {
+    "query": "I am looking for a COO for my company in China and I want to see if they are culturally a right fit for our company. Suggest me an assessment that they can complete in about an hour",
+    "assessments": [
+      {
+        "name": "Motivation Questionnaire MQM5 | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/motivation-questionnaire-mqm5/",
+        "description": "Motivation Questionnaire MQM5: By understanding what motivates their staff, managers can unlock each individual\u2019s full potential and direct their energies more constructively. This\u2026"
+      },
+      {
+        "name": "Global Skills Assessment | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/global-skills-assessment/",
+        "description": "Global Skills Assessment: The Global Skills Assessment (GSA) is an assessment used to measure 96 discrete skills/behaviors. These 96 skill scores are directly aligned to the most\u2026"
+      },
+      {
+        "name": "Graduate 8.0 Job Focused Assessment | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/graduate-8-0-job-focused-assessment-4228/",
+        "description": "Graduate 8.0 Job Focused Assessment : The Graduate 8.0 Job Focused Assessment is a short, targeted, globally applicable assessment to help you identify graduates with the highest potential to\u2026"
+      }
+    ]
+  },
+  {
+    "query": "Content Writer required, expert in English and SEO.",
+    "assessments": [
+      {
+        "name": "Drupal (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/drupal-new/",
+        "description": "Drupal (New): Multi-choice test that measures the knowledge of Drupal setup, content management, user interface, module development and security."
+      },
+      {
+        "name": "Search Engine Optimization (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/search-engine-optimization-new/",
+        "description": "Search Engine Optimization (New): Multi-choice test that measures the knowledge on the concepts of need of SEO, SEO planning, SEO strategies, SEO software, tools and exchanging links."
+      },
+      {
+        "name": "Administrative Professional - Short Form | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/administrative-professional-short-form/",
+        "description": "Administrative Professional - Short Form: The Administrative Professional solution is for entry to mid-level positions that involve routine clerical and administrative functions in addition to office\u2026"
+      },
+      {
+        "name": "Entry Level Sales Sift Out 7.1 | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/entry-level-sales-sift-out-7-1/",
+        "description": "Entry Level Sales Sift Out 7.1: The Entry Level Sales Sift Out 7.1 Solution is for entry-level positions in which employees proactively sell products or services to customers and have their\u2026"
+      },
+      {
+        "name": "General Entry Level \u2013 Data Entry 7.0 Solution | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/general-entry-level-data-entry-7-0-solution/",
+        "description": "General Entry Level \u2013 Data Entry 7.0 Solution: Our General Entry Level \u2013 Data Entry 7.0 solution is designed for entry-level positions that include entering data into computers or data management systems\u2026"
+      }
+    ]
+  },
+  {
+    "query": "Looking for a candidate with Development experience \u2013 Java or JavaScript, CSS, HTML (Automation), Selenium WebDriver and page object design pattern (Automation), SQL server knowledge, Test case management experience, and Manual Testing skills.",
+    "assessments": [
+      {
+        "name": "Manual Testing (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/manual-testing-new/",
+        "description": "Manual Testing (New): Multi-choice test that measures the knowledge of the software testing life cycle, testing tools and techniques, design of test cases and generation of test\u2026"
+      }
+    ]
+  },
+  {
+    "query": "ICICI Bank Assistant Admin, Experience required 0-2 years, test should be 30-40 mins long",
+    "assessments": [
+      {
+        "name": "Administrative Professional - Short Form | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/administrative-professional-short-form/",
+        "description": "Administrative Professional - Short Form: The Administrative Professional solution is for entry to mid-level positions that involve routine clerical and administrative functions in addition to office\u2026"
+      },
+      {
+        "name": "Verify - Numerical Ability | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/verify-numerical-ability/",
+        "description": "Verify - Numerical Ability: The next-generation Verify Numerical Ability Test provides a replacement for the existing Numerical Reasoning test in our Verify range of ability tests and the\u2026"
+      },
+      {
+        "name": "Financial Professional - Short Form | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/financial-professional-short-form/",
+        "description": "Financial Professional - Short Form: This solution is for mid-level financial institution positions that require Series 6/7 certification. Candidates answer multiple choice questions to measure\u2026"
+      },
+      {
+        "name": "Bank Administrative Assistant - Short Form | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/bank-administrative-assistant-short-form/",
+        "description": "Bank Administrative Assistant - Short Form: The Administrative Assistant solution is for entry-level clerical positions that interact with external or internal customers. Sample tasks for these jobs\u2026"
+      },
+      {
+        "name": "General Entry Level \u2013 Data Entry 7.0 Solution | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/general-entry-level-data-entry-7-0-solution/",
+        "description": "General Entry Level \u2013 Data Entry 7.0 Solution: Our General Entry Level \u2013 Data Entry 7.0 solution is designed for entry-level positions that include entering data into computers or data management systems\u2026"
+      },
+      {
+        "name": "Basic Computer Literacy (Windows 10) (New) | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/basic-computer-literacy-windows-10-new/",
+        "description": "Basic Computer Literacy (Windows 10) (New): The Basic Computer Literacy (Windows 10) simulation measures knowledge of general computer terminology, processes, and applications and the ability to perform\u2026"
+      }
+    ]
+  },
+  {
+    "query": "Suggest me some tests for a role with the following responsibilities and requirements:\nKEY RESPONSIBITILES:\nManage the sound-scape of the station through appropriate creative and marketing interventions to Increase or Maintain the listenership\nActs as an interface between Programming & sales team, thereby supporting the sales team by providing creative inputs in order to increase the overall ad spends by clients\nBuild brand Mirchi by ideating fresh programming initiatives on air campaigns, programming led on-ground events & new properties to ensure brand differentiation & thus increase brand recall at station level\nInvest time in local RJs to grow & develop them as local celebrities\nThrough strong networking, must focus on identifying the best of local talent and ensure to bring the creative minds from the market on board with Mirchi\nBuild radio as a category for both listeners & advertisers\nPeople Management\nIdentifying the right talent and investing time in developing them by frequent feedback on their performance\nMonitor, Coach and mentor team members on a regular basis\nDevelopment of Jocks as per guidelines\nMust have an eye to spot the local talent to fill up vacancies locally\nTECHNICAL SKILLS & QUALIFICATION REQUIRED:\nGraduation / Post Graduation (Any specialisation) with 8 -12 years of relevant experience\nExperience in digital content conceptualisation\nStrong branding focus\nMust be well-read in variety of areas and must keep up with the latest events in the city / cluster / country\nMust know to read, write & speak English\nPERSONAL ATTRIBUTES:\nExcellent communication skills\nGood interpersonal skills\nPeople management\nThe duration should be at most 90 mins",
+    "assessments": [
+      {
+        "name": "Verify - Verbal Ability - Next Generation | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/verify-verbal-ability-next-generation/",
+        "description": "Verify - Verbal Ability - Next Generation: The Verbal Ability test measures the ability to read written passages and comprehend the text, interpret tone and author intent, identify main ideas, and\u2026"
+      },
+      {
+        "name": "SHL Verify Interactive - Inductive Reasoning | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/shl-verify-interactive-inductive-reasoning/",
+        "description": "SHL Verify Interactive - Inductive Reasoning: Evaluates ability to identify specific patterns in data or situations and generalize that information to broader contexts."
+      },
+      {
+        "name": "Occupational Personality Questionnaire OPQ32r | SHL",
+        "url": "https://www.shl.com/solutions/products/product-catalog/view/occupational-personality-questionnaire-opq32r/",
+        "description": "Occupational Personality Questionnaire OPQ32r: The SHL Occupational Personality Questionnaire, the OPQ32, is one of the most widely used and respected measures of workplace behavioural style in the world\u2026"
+      }
+    ]
+  }
+]

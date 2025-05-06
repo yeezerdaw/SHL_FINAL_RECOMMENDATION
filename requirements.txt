@@ -1,0 +1,20 @@
+fastapi
+uvicorn[standard] 
+streamlit
+groq
+rank_bm25
+transformers 
+
+# PyTorch (assuming CUDA compatible environment for GPU support)
+# This will pull the appropriate CUDA-enabled version if the build environment supports it.
+# If building in an environment without CUDA, it will typically fall back to a CPU version.
+torch
+
+
+# Utilities
+python-dotenv # For loading .env files
+pydantic # Used by FastAPI, but good to have explicitly for version control
+requests # Good to have, might be used by Streamlit or if you add URL fetching
+tqdm # For progress bars in scripts
+# scikit-learn # Include if used in any final scripts/experiments (e.g., for TF-IDF, K-Means)
+numpy # Often a dependency of scikit-learn, torch, rank_bm25

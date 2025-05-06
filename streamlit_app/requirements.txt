@@ -1,7 +1,0 @@
-streamlit_app/requirements.txt
-streamlit
-pandas
-numpy
-sentence-transformers
-dotenv
-requests
