@@ -54,6 +54,7 @@ SHL-ASSESSMENT-RECOMMENDATION/
 │   ├── evaluate.py # Script for evaluating the recommender
 │   ├── generate_embeddings.py # Script for data preprocessing (if used)
 │   └── update_assessments.py # Script for data preprocessing (if used)
+│   └── shl_scraper.py # Script for data preprocessing (if used)
 ├── main.py # FastAPI application
 ├── streamlit_ui.py # Streamlit application
 ├── requirements.txt # Python package dependencies
